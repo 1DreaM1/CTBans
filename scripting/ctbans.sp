@@ -682,11 +682,11 @@ public Action CMD_CTBan(int client, int args) {
 public Action CMD_UnCTBan(int client, int args) {
 
 	// Accepted inputs:
-	// !unctban <player>
+	// !unctban <player/steamid>
 
 	if (args != 1) {
 
-		CReplyToCommand(client, "%sUsage: !unctban <player>", g_sChatPrefix);
+		CReplyToCommand(client, "%sUsage: !unctban <player/steamid>", g_sChatPrefix);
 		return Plugin_Handled;
 
 	}
@@ -694,38 +694,51 @@ public Action CMD_UnCTBan(int client, int args) {
 	char arg1[MAX_NAME_LENGTH];
 	GetCmdArg(1, arg1, sizeof(arg1));
 
-	int target = FindTarget(client, arg1, true, false);
+    if (StrContains(arg1, "STEAM_", false) == -1) {
 
-	if (!IsValidClient(target)) {
+        int target = FindTarget(client, arg1, true, false);
 
-		CReplyToCommand(client, "%sNot a valid target", g_sChatPrefix);
-		return Plugin_Handled;
-
-	}
-
-	if (g_iBanInfo[target][iTimeLeft] < 0) {
-
+        if (!IsValidClient(target)) {
+            CReplyToCommand(client, "%sNot a valid target", g_sChatPrefix);
+            return Plugin_Handled;
+        }
+    
+        if (g_iBanInfo[target][iTimeLeft] < 0) {
+    
 		CReplyToCommand(client, "%s{purple}%N{default} is not CT Banned", g_sChatPrefix, target);
-		return Plugin_Handled;
+            return Plugin_Handled;
+        }
+        
+        char query[512], steamid[64];
+    
+        GetClientAuthId(target, AuthId_Engine, steamid, sizeof(steamid));
+        
+        Format(query, sizeof(query), "UPDATE `ctbans` SET `timeleft`= -1,`removed`= 'R' WHERE `perp_steamid` = '%s' AND `id` = %i;", steamid, g_iBanInfo[target][iID]);
+        SQL_TQuery(g_hDB, SQL_ErrorCheckCallback, query, _, DBPrio_Low);
+    
+        g_iBanInfo[target][iCreated] = 0;
+    	g_iBanInfo[target][iLength] = -1;
+    	g_iBanInfo[target][iTimeLeft] = -1;
+    	Format(g_iBanInfo[target][sAdmin], 64, "");
+    	Format(g_iBanInfo[target][sReason], 120, "");
 
-	}
+        CPrintToChatAll("%s{purple}%N{default} odstránil CT Ban hráčovi {purple}%N{default}", g_sChatPrefix, client, target);
 
-	char query[512], steamid[64];
-	GetClientAuthId(target, AuthId_Engine, steamid, sizeof(steamid));
+        return Plugin_Handled;
 
-	Format(query, sizeof(query), "UPDATE `ctbans` SET `timeleft`= -1,`removed`= 'R' WHERE `perp_steamid` = '%s' AND `id` = %i;", steamid, g_iBanInfo[target][iID]);
-	SQL_TQuery(g_hDB, SQL_ErrorCheckCallback, query, _, DBPrio_Low);
+    } else {
 
-	g_iBanInfo[target][iCreated] = 0;
-	g_iBanInfo[target][iLength] = -1;
-	g_iBanInfo[target][iTimeLeft] = -1;
-	Format(g_iBanInfo[target][sAdmin], 64, "");
-	Format(g_iBanInfo[target][sReason], 120, "");
+        char query[512];
+        
+        // Make sure all the steamids are using the same format
+	    ReplaceString(arg1, 64, "STEAM_0:", "STEAM_1:", false);
 
-	CPrintToChatAll("%s{purple}%N{default} has removed {purple}%N's{default} CT Ban", g_sChatPrefix, client, target);
-
-	return Plugin_Handled;
-
+        Format(query, sizeof(query), "UPDATE `ctbans` SET `timeleft`= -1,`removed`= 'R' WHERE `perp_steamid` = '%s';", arg1);
+        SQL_TQuery(g_hDB, SQL_ErrorCheckCallback, query, _, DBPrio_Low);
+    	CPrintToChatAll("%s{purple}%N{default} has removed {purple}%N's{default} CT Ban", g_sChatPrefix, client, arg1);
+    
+        return Plugin_Handled;
+    }
 }
 
 public Action CMD_OfflineCTBan(int client, int args) {
@@ -733,17 +746,21 @@ public Action CMD_OfflineCTBan(int client, int args) {
 	// Accepted inputs:
 	// !offlinectban <steamid>
 
-	if (args > 3) {
+	if (args != 3) {
 
-		CReplyToCommand(client, "%sUsage: !offlinectban <steamid>", g_sChatPrefix);
+		CReplyToCommand(client, "%sUsage: !offlinectban <steamid> <time> <reason>", g_sChatPrefix);
 		return Plugin_Handled;
 
 	}
 
-	char arg1[120];
+	char arg1[120], arg2[120], arg3[120];
 	GetCmdArg(1, arg1, sizeof(arg1));
+	GetCmdArg(2, arg2, sizeof(arg2));
+	GetCmdArg(3, arg3, sizeof(arg3));
+	
+	int bantime = StringToInt(arg2);
 
-	PerformOfflineCTBan(client, arg1);
+	PerformOfflineCTBan(client, arg1, bantime, arg3);
 
 	return Plugin_Handled;
 
@@ -890,7 +907,7 @@ public int RageCTBanMenuHandler(Menu menu, MenuAction action, int param1, int pa
 		char steamid[64];
 		menu.GetItem(param2, steamid, sizeof(steamid));
 
-		PerformOfflineCTBan(param1, steamid);
+		PerformOfflineCTBan(param1, steamid, 0, "Breaking Rules");
 
 	}
 
@@ -1031,7 +1048,7 @@ public void CTBanPlayerMenu(int client) {
 
 	if (count == 0) {
 
-		CPrintToChat(client, "%sThere are no players to CT Ban", g_sChatPrefix);
+		CPrintToChat(client, "%sŽiadni hráči na zabanovanie", g_sChatPrefix);
 		return;
 
 	}
@@ -1130,7 +1147,7 @@ public void RageCTBanMenu(int client) {
 
 public void PerformCTBan(int client, int target, int time, char[] reason) {
 
-	if (!IsValidClient(client)) {
+	if (!IsValidClient(client) && client != 0) {
 
 		return;
 
@@ -1168,15 +1185,21 @@ public void PerformCTBan(int client, int target, int time, char[] reason) {
 	g_iBanInfo[target][iLength] = time;
 	g_iBanInfo[target][iTimeLeft] = time;
 	
-	GetClientName(client, g_iBanInfo[target][sAdmin], MAX_NAME_LENGTH);
 	strcopy(g_iBanInfo[target][sReason], 120, reason);
 
 	char targetSteamid[64], adminSteamid[64], adminName[MAX_NAME_LENGTH*2];
 
 	GetClientAuthId(target, AuthId_Engine, targetSteamid, sizeof(targetSteamid));
-	GetClientAuthId(client, AuthId_Engine, adminSteamid, sizeof(adminSteamid));
 
-	GetClientName(client, adminName, sizeof(adminName));
+    GetClientName(client, adminName, sizeof(adminName));
+    GetClientName(client, g_iBanInfo[target][sAdmin], MAX_NAME_LENGTH);
+
+	 if (client == 0) {
+        adminSteamid = "0";
+        adminName = "Console";
+    } else {
+        GetClientAuthId(client, AuthId_Engine, adminSteamid, sizeof(adminSteamid));
+    }
 
 	if (!SQL_EscapeString(g_hDB, adminName, adminName, sizeof(adminName))) {
 
@@ -1200,11 +1223,12 @@ public void PerformCTBan(int client, int target, int time, char[] reason) {
 	FormatSeconds(time, formattedLength, sizeof(formattedLength), false);
 	CPrintToChatAll("%s{purple}%N{default} has CT Banned {purple}%N{default} %s for {orange}%s{default}", g_sChatPrefix, client, target, formattedLength, reason);
 
+
 }
 
-public void PerformOfflineCTBan(int client, char[] targetSteamid) {
+public void PerformOfflineCTBan(int client, char[] targetSteamid, int bantime, char[] reason) {
 
-	if (!IsValidClient(client)) {
+	if (!IsValidClient(client) && client != 0) {
 
 		return;
 
@@ -1251,8 +1275,13 @@ public void PerformOfflineCTBan(int client, char[] targetSteamid) {
 
 	char adminSteamid[64], adminName[MAX_NAME_LENGTH*2];
 
-	GetClientAuthId(client, AuthId_Engine, adminSteamid, sizeof(adminSteamid));
-	GetClientName(client, adminName, sizeof(adminName));
+    if (client == 0) {
+        adminSteamid = "0";
+        adminName = "Console";
+    } else {
+        GetClientAuthId(client, AuthId_Engine, adminSteamid, sizeof(adminSteamid));
+        GetClientName(client, adminName, sizeof(adminName));
+    }
 
 	if (!SQL_EscapeString(g_hDB, targetSteamid, targetSteamid, 64)) {
 
@@ -1263,10 +1292,13 @@ public void PerformOfflineCTBan(int client, char[] targetSteamid) {
 	}
 
 	char query[512];
-	Format(query, sizeof(query), "INSERT INTO `ctbans` VALUES (NULL, '%s', '%s', '%s', %i, 0, 0, 'Breaking Rules', 'N')", targetSteamid, adminSteamid, adminName, GetTime());
+	Format(query, sizeof(query), "INSERT INTO `ctbans` VALUES (NULL, '%s', '%s', '%s', %i, %i, %i, '%s', 'N')", targetSteamid, adminSteamid, adminName, GetTime(), bantime, bantime, reason);
 	SQL_TQuery(g_hDB, SQL_ErrorCheckCallback, query, _, DBPrio_Low);
 
-	CPrintToChat(client, "%sYou have CT Banned {orange}%s{default} permanently", g_sChatPrefix, targetSteamid);
+	char formattedLength[32];
+	FormatSeconds(bantime, formattedLength, sizeof(formattedLength), false);
+	CPrintToChatAll("%sSID {purple}%s{default} has CT Ban %s by {purple}%N{default} for {orange}%s{default}.", g_sChatPrefix, targetSteamid,  formattedLength, client, reason);
+	
 	return;
 
 }
